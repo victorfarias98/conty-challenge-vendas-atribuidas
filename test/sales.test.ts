@@ -1,8 +1,10 @@
+import { createHmac } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.ts";
 import { attributeSale } from "../src/attribution.ts";
 import { openDatabase } from "../src/db.ts";
 import type { OrderView, RefundView } from "../src/sales.ts";
+import { SIGNATURE_HEADER } from "../src/signature.ts";
 
 type App = ReturnType<typeof createApp>;
 type OrderResult = { outcome: string; order: OrderView };
@@ -213,6 +215,78 @@ describe("estorno", () => {
     expect((await send("POST", "/webhooks/refunds", { id: 1, amount: "5.00" })).status).toBe(422);
     expect((await send("POST", "/webhooks/refunds", { order_id: 5001, amount: "5.00" })).status).toBe(422);
     expect((await send("POST", "/webhooks/refunds", { id: 1, order_id: 5001, amount: "0.00" })).status).toBe(422);
+  });
+});
+
+describe("assinatura do webhook", () => {
+  const SECRET = "segredo-de-teste";
+
+  function sign(body: string, secret = SECRET): string {
+    return createHmac("sha256", secret).update(body, "utf8").digest("base64");
+  }
+
+  async function deliver(path: string, body: string, signature?: string): Promise<Response> {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (signature !== undefined) headers[SIGNATURE_HEADER] = signature;
+    return app.request(path, { method: "POST", headers, body });
+  }
+
+  beforeEach(async () => {
+    app = createApp(openDatabase(), () => now, SECRET);
+    await send("PUT", "/creators/crt_ana/codes", { coupons: ["ANA10"], utm_contents: ["ana"] });
+  });
+
+  it("aceita o pedido assinado com o segredo da loja", async () => {
+    const body = JSON.stringify(orderPayload());
+
+    const res = await deliver("/webhooks/orders", body, sign(body));
+
+    expect(res.status).toBe(201);
+    expect((await salesOf("crt_ana")).net_cents).toBe(15000);
+  });
+
+  it("recusa pedido sem assinatura e não grava nada", async () => {
+    const res = await deliver("/webhooks/orders", JSON.stringify(orderPayload()));
+
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("signature_invalid");
+    expect((await app.request("/orders/5001")).status).toBe(404);
+  });
+
+  it("recusa assinatura feita com outro segredo", async () => {
+    const body = JSON.stringify(orderPayload());
+
+    const res = await deliver("/webhooks/orders", body, sign(body, "outro-segredo"));
+
+    expect(res.status).toBe(401);
+    expect((await salesOf("crt_ana")).orders).toBe(0);
+  });
+
+  it("recusa corpo alterado depois de assinado", async () => {
+    const signature = sign(JSON.stringify(orderPayload()));
+    const tampered = JSON.stringify(orderPayload({ total_price: "9999.00" }));
+
+    const res = await deliver("/webhooks/orders", tampered, signature);
+
+    expect(res.status).toBe(401);
+    expect((await app.request("/orders/5001")).status).toBe(404);
+  });
+
+  it("recusa assinatura que não é base64 de um HMAC", async () => {
+    const res = await deliver("/webhooks/orders", JSON.stringify(orderPayload()), "não é assinatura");
+    expect(res.status).toBe(401);
+  });
+
+  it("protege também o webhook de estorno", async () => {
+    const body = JSON.stringify({ id: 9001, order_id: 5001, amount: "50.00" });
+
+    expect((await deliver("/webhooks/refunds", body)).status).toBe(401);
+    expect((await app.request("/refunds/9001")).status).toBe(404);
+    expect((await deliver("/webhooks/refunds", body, sign(body))).status).toBe(202);
+  });
+
+  it("não exige assinatura nas rotas que não são webhook", async () => {
+    expect((await app.request("/creators/crt_ana/sales")).status).toBe(200);
   });
 });
 

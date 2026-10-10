@@ -14,12 +14,15 @@ npm run dev
 
 A API sobe em `http://127.0.0.1:3005` e grava em `data/vendas.sqlite` (`PORT` e `DB_PATH` mudam isso). Não conecta em loja nenhuma: os webhooks são chamados à mão ou pelos testes.
 
+Com `SHOPIFY_WEBHOOK_SECRET` definido, os webhooks só são aceitos assinados (veja "Assinatura do webhook"). Sem a variável, a API avisa na subida e aceita qualquer chamada, que é o modo dos exemplos abaixo.
+
 ## Por onde ler
 
 1. `src/attribution.ts`: a regra de atribuição, inteira, em uma função pura.
 2. `src/sales.ts`: ingestão de pedido e de estorno, idempotência e o teto dos estornos.
 3. `test/sales.test.ts`: duplicado, estorno parcial, repetido, acima do total e antes do pedido.
-4. `src/db.ts` e `src/app.ts`: schema e HTTP.
+4. `src/signature.ts`: a conferência da assinatura do webhook.
+5. `src/db.ts` e `src/app.ts`: schema e HTTP.
 
 ## Regra de atribuição
 
@@ -46,6 +49,23 @@ A atribuição é decidida uma vez, quando o pedido chega, e não é recalculada
 - **Teto:** cada estorno aplica no máximo o que ainda resta da venda. Se pedir mais, `applied_cents` fica menor que `amount_cents` e `capped` vem `true`. A soma aplicada nunca passa do total.
 - **Antes do pedido:** o estorno é gravado como `pending` e responde `202`. Quando o pedido chega, os pendentes são aplicados na ordem em que chegaram, com o mesmo teto. `received_at` e `applied_at` mostram as duas datas.
 
+## Assinatura do webhook
+
+A Shopify assina o corpo cru de cada webhook com HMAC-SHA256, usando o segredo da loja, e manda o resultado em base64 no cabeçalho `X-Shopify-Hmac-Sha256`. Com `SHOPIFY_WEBHOOK_SECRET` definido, `POST /webhooks/orders` e `POST /webhooks/refunds` refazem a conta e respondem `401 signature_invalid` se o cabeçalho falta ou não confere. Nada é gravado nesse caso, nem a entrega em `deliveries`.
+
+- A conferência é feita sobre o texto recebido, antes de ele virar JSON, e a comparação é em tempo constante.
+- As outras rotas não são webhook e não pedem assinatura.
+- Entrega repetida com assinatura válida continua sendo tratada pela idempotência: responde `200` e não soma.
+
+Para chamar à mão com o segredo ligado:
+
+```bash
+BODY='{"id":5001,"total_price":"150.00","discount_codes":[{"code":"ANA10"}]}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SHOPIFY_WEBHOOK_SECRET" -binary | base64)
+curl -s -X POST localhost:3005/webhooks/orders \
+  -H 'content-type: application/json' -H "X-Shopify-Hmac-Sha256: $SIG" -d "$BODY"
+```
+
 ## API
 
 | Rota | Faz |
@@ -57,7 +77,7 @@ A atribuição é decidida uma vez, quando o pedido chega, e não é recalculada
 | `GET /refunds/:id` | um estorno, inclusive pendente |
 | `GET /creators/:id/sales` | total bruto, estornado e líquido do criador |
 
-Os webhooks respondem `201` quando processam, `200` quando é repetição e `202` quando o estorno ficou pendente. Entrada inválida responde `422` com `{ "error": { "code", "message" } }`.
+Os webhooks respondem `201` quando processam, `200` quando é repetição e `202` quando o estorno ficou pendente. Entrada inválida responde `422` com `{ "error": { "code", "message" } }`. Assinatura ausente ou inválida responde `401` no mesmo formato.
 
 ### Exemplos
 
@@ -127,7 +147,7 @@ curl -s localhost:3005/orders/5001
 
 ## O que ficou de fora
 
-- **Assinatura do webhook.** Não há verificação de HMAC; qualquer um que alcance a rota grava pedido.
+- **Assinatura é opcional e de um segredo só.** Sem `SHOPIFY_WEBHOOK_SECRET` os webhooks ficam abertos, e não há troca de segredo com dois valendo ao mesmo tempo.
 - **`financial_status` não muda a conta.** O campo é gravado, mas um pedido `pending` soma igual a um `paid`. Só o webhook de estorno reverte.
 - **Atualização de pedido.** A primeira entrega vence; não há tratamento para pedido editado depois.
 - **Estorno pendente que nunca encontra pedido** fica pendente para sempre; não há alerta nem expiração.
@@ -137,6 +157,6 @@ curl -s localhost:3005/orders/5001
 
 ## Uso de IA
 
-O código, os testes e este README foram escritos com Claude Code (Claude Opus), a partir do enunciado. A regra de desempate e as decisões acima foram propostas pela IA.
+O código, os testes e este README foram escritos com Claude Code (Claude Opus), a partir do enunciado. A regra de desempate e as decisões acima foram propostas pela IA. A conferência da assinatura do webhook entrou num segundo commit, também escrito com Claude Code.
 
 O que eu revisei: os padrões de backend, as tipagens, os early returns, as constantes e se os testes realmente testam os cenários de falha.

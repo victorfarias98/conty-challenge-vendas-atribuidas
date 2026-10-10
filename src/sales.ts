@@ -41,10 +41,10 @@ export type OrderView = {
 };
 
 export class SalesError extends Error {
-  readonly status: 404 | 409 | 422;
+  readonly status: 401 | 404 | 409 | 422;
   readonly code: string;
 
-  constructor(status: 404 | 409 | 422, code: string, message: string) {
+  constructor(status: 401 | 404 | 409 | 422, code: string, message: string) {
     super(message);
     this.status = status;
     this.code = code;
