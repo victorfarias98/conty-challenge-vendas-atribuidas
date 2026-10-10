@@ -139,4 +139,4 @@ curl -s localhost:3005/orders/5001
 
 O código, os testes e este README foram escritos com Claude Code (Claude Opus), a partir do enunciado. A regra de desempate e as decisões acima foram propostas pela IA.
 
-O que eu revisei: <preencher antes de enviar, só com o que foi de fato conferido>.
+O que eu revisei: os padrões de backend, as tipagens, os early returns, as constantes e se os testes realmente testam os cenários de falha.
