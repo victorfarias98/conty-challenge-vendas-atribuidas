@@ -159,4 +159,6 @@ curl -s localhost:3005/orders/5001
 
 O código, os testes e este README foram escritos com Claude Code (Claude Opus), a partir do enunciado. A regra de desempate e as decisões acima foram propostas pela IA. A conferência da assinatura do webhook entrou num segundo commit, também escrito com Claude Code.
 
+Verificação automática, rodada pela IA e não por mim: `npm test` passa com 25 testes em 1 arquivo e `npx tsc --noEmit` não acusa erro. Entre os testes estão "a soma dos estornos nunca passa do valor da venda", "estorno que chega antes do pedido fica pendente e é aplicado quando o pedido chega" e "recusa corpo alterado depois de assinado". O exemplo de `curl` com assinatura deste README foi executado contra a API em execução: 401 sem o cabeçalho, 201 com ele.
+
 O que eu revisei: os padrões de backend, as tipagens, os early returns, as constantes e se os testes realmente testam os cenários de falha.
